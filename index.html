@@ -77,14 +77,16 @@ html,body{
 
 /* ── BOARD WRAPPER ── */
 #bwrap{
-  flex:1 1 0;
+  touch-action:none;
+flex:1 1 0;
   min-height:0;
   width:100%;max-width:420px;
   display:flex;align-items:center;justify-content:center;
   position:relative;z-index:2;
 }
 #board{
-  /* size set by JS */
+  touch-action:none;
+/* size set by JS */
   position:relative;
   background:#131929;
   border-radius:16px;
@@ -302,7 +304,7 @@ const mwinEl  = document.getElementById('mwin');
 
 /* ── AUDIO: generated sounds, no external files ── */
 let actx=null, masterGain=null, musicGain=null, musicTimer=null, noteIndex=0;
-const melody=[262,330,392,523,392,330,294,349,440,587,440,349];
+const melody=[392,494,587,659,587,494,440,523,659,784,659,523,330,392,494,587];
 
 function unlockAudio(){
   try{
@@ -363,18 +365,40 @@ function startMusic(){
   musicTimer=setInterval(()=>{
     if(!actx||actx.state!=='running')return;
     const now=actx.currentTime;
-    const freq=melody[noteIndex%melody.length];
-    noteIndex++;
-    const osc=actx.createOscillator();
-    const gain=actx.createGain();
-    osc.type='sine';
-    osc.frequency.setValueAtTime(freq,now);
-    gain.gain.setValueAtTime(0,now);
-    gain.gain.linearRampToValueAtTime(.75,now+.025);
-    gain.gain.exponentialRampToValueAtTime(.001,now+.42);
-    osc.connect(gain);gain.connect(musicGain);
-    osc.start(now);osc.stop(now+.48);
-  },420);
+    const step=noteIndex++;
+    const freq=melody[step%melody.length];
+    const lead=actx.createOscillator();
+    const leadGain=actx.createGain();
+    lead.type='triangle';
+    lead.frequency.setValueAtTime(freq,now);
+    lead.frequency.exponentialRampToValueAtTime(freq*1.01,now+.12);
+    leadGain.gain.setValueAtTime(0,now);
+    leadGain.gain.linearRampToValueAtTime(.62,now+.018);
+    leadGain.gain.exponentialRampToValueAtTime(.001,now+.34);
+    lead.connect(leadGain);leadGain.connect(musicGain);
+    lead.start(now);lead.stop(now+.38);
+
+    if(step%2===0){
+      const bass=actx.createOscillator();
+      const bassGain=actx.createGain();
+      bass.type='sine';
+      bass.frequency.setValueAtTime(freq/4,now);
+      bassGain.gain.setValueAtTime(0,now);
+      bassGain.gain.linearRampToValueAtTime(.5,now+.02);
+      bassGain.gain.exponentialRampToValueAtTime(.001,now+.22);
+      bass.connect(bassGain);bassGain.connect(musicGain);
+      bass.start(now);bass.stop(now+.26);
+    }
+
+    const beat=actx.createOscillator();
+    const beatGain=actx.createGain();
+    beat.type='square';
+    beat.frequency.setValueAtTime(step%4===0?95:160,now);
+    beatGain.gain.setValueAtTime(.13,now);
+    beatGain.gain.exponentialRampToValueAtTime(.001,now+.045);
+    beat.connect(beatGain);beatGain.connect(musicGain);
+    beat.start(now);beat.stop(now+.06);
+  },300);
 }
 
 document.addEventListener('pointerdown',unlockAudio,{once:true,passive:true});
@@ -598,22 +622,38 @@ document.addEventListener('keydown',e=>{
   btn.addEventListener('click',()=>move(dirs[i]));
 });
 
-/* ── SWIPE ── */
+/* ── SWIPE + TAP BOARD ── */
 (function(){
-  let sx,sy,go=false,moved=false;
-  const T=22;
+  let sx=0,sy=0,go=false,moved=false,lastMoveAt=0;
+  const T=18;
   const bw=document.getElementById('bwrap');
-  bw.addEventListener('pointerdown',e=>{sx=e.clientX;sy=e.clientY;go=true;moved=false;try{bw.setPointerCapture(e.pointerId);}catch(x){}});
+  function safeMove(dir){
+    const now=Date.now();
+    if(now-lastMoveAt<130)return;
+    lastMoveAt=now;
+    move(dir);
+  }
+  function directionFromTap(x,y){
+    const r=boardEl.getBoundingClientRect();
+    const dx=x-(r.left+r.width/2), dy=y-(r.top+r.height/2);
+    return Math.abs(dx)>Math.abs(dy) ? (dx>0?'right':'left') : (dy>0?'down':'up');
+  }
+  function finish(x,y){
+    if(!go)return;
+    const dx=x-sx,dy=y-sy,ax=Math.abs(dx),ay=Math.abs(dy);
+    go=false;
+    if(Math.max(ax,ay)>=T){
+      safeMove(ax>ay?(dx>0?'right':'left'):(dy>0?'down':'up'));
+    }else{
+      safeMove(directionFromTap(x,y));
+    }
+  }
+  bw.addEventListener('pointerdown',e=>{sx=e.clientX;sy=e.clientY;go=true;moved=false;try{bw.setPointerCapture(e.pointerId);}catch(x){}},{passive:true});
   bw.addEventListener('pointermove',e=>{
     if(!go)return;
     if(Math.max(Math.abs(e.clientX-sx),Math.abs(e.clientY-sy))>T){moved=true;e.preventDefault();}
   },{passive:false});
-  bw.addEventListener('pointerup',e=>{
-    if(!go||!moved){go=false;return;}go=false;
-    const dx=e.clientX-sx,dy=e.clientY-sy,ax=Math.abs(dx),ay=Math.abs(dy);
-    if(Math.max(ax,ay)<T)return;
-    move(ax>ay?(dx>0?'right':'left'):(dy>0?'down':'up'));
-  });
+  bw.addEventListener('pointerup',e=>finish(e.clientX,e.clientY));
   bw.addEventListener('pointercancel',()=>{go=false;});
   bw.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;sy=e.touches[0].clientY;go=true;moved=false;},{passive:true});
   bw.addEventListener('touchmove',e=>{
@@ -621,10 +661,8 @@ document.addEventListener('keydown',e=>{
     if(Math.max(Math.abs(e.touches[0].clientX-sx),Math.abs(e.touches[0].clientY-sy))>T){moved=true;e.preventDefault();}
   },{passive:false});
   bw.addEventListener('touchend',e=>{
-    if(!go||!moved){go=false;return;}go=false;
-    const dx=e.changedTouches[0].clientX-sx,dy=e.changedTouches[0].clientY-sy,ax=Math.abs(dx),ay=Math.abs(dy);
-    if(Math.max(ax,ay)<T)return;
-    move(ax>ay?(dx>0?'right':'left'):(dy>0?'down':'up'));
+    if(!e.changedTouches.length)return;
+    finish(e.changedTouches[0].clientX,e.changedTouches[0].clientY);
   },{passive:true});
 })();
 
