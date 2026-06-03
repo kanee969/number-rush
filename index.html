@@ -65,15 +65,17 @@ html,body{
   display:flex;align-items:center;justify-content:space-between;
   flex-shrink:0;position:relative;z-index:2;
 }
+#top-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;}
 #hint{font-size:11px;color:#475569;}
-#rbtn{
+#soundbtn,#rbtn{
   background:linear-gradient(135deg,#2563eb,#1d4ed8);
   color:#fff;border:none;border-radius:10px;
   padding:7px 14px;font-size:12px;font-weight:700;
   cursor:pointer;box-shadow:0 3px 14px rgba(37,99,235,.5);
   transition:transform .1s;
 }
-#rbtn:active{transform:scale(.91);}
+#soundbtn:active,#rbtn:active{transform:scale(.91);}
+#soundbtn{min-width:38px;padding:7px 10px;}
 
 /* ── BOARD WRAPPER ── */
 #bwrap{
@@ -250,7 +252,7 @@ flex:1 1 0;
 
   <div id="topbar">
     <span id="hint">✦ Swipe to move</span>
-    <button id="rbtn">↺ New Game</button>
+    <div id="top-actions"><button id="soundbtn" type="button" aria-label="Toggle sound">🔊</button><button id="rbtn">↺ New Game</button></div>
   </div>
 
   <div id="bwrap">
@@ -300,10 +302,13 @@ const svEl    = document.getElementById('sv');
 const bvEl    = document.getElementById('bv');
 const movEl   = document.getElementById('mov');
 const mwinEl  = document.getElementById('mwin');
+const soundBtn = document.getElementById('soundbtn');
+const SAVE_KEY = 'nr3_save';
 
 
 /* ── AUDIO: generated sounds, no external files ── */
 let actx=null, masterGain=null, musicGain=null, musicTimer=null, noteIndex=0;
+let soundOn = localStorage.getItem('nr3_sound') !== 'off';
 const melody=[392,494,587,659,587,494,440,523,659,784,659,523,330,392,494,587];
 
 function unlockAudio(){
@@ -316,11 +321,11 @@ function unlockAudio(){
       masterGain.gain.value=.48;
       masterGain.connect(actx.destination);
       musicGain=actx.createGain();
-      musicGain.gain.value=.12;
+      musicGain.gain.value=soundOn ? .12 : 0;
       musicGain.connect(masterGain);
     }
     if(actx.state==='suspended')actx.resume();
-    startMusic();
+    if(soundOn)startMusic();
   }catch(e){}
 }
 
@@ -401,8 +406,76 @@ function startMusic(){
   },300);
 }
 
+function updateSoundButton(){
+  if(!soundBtn)return;
+  soundBtn.textContent=soundOn?'🔊':'🔇';
+  soundBtn.setAttribute('aria-label',soundOn?'Music on':'Music off');
+}
+function setSound(on){
+  soundOn=on;
+  localStorage.setItem('nr3_sound',soundOn?'on':'off');
+  if(musicGain)musicGain.gain.value=soundOn ? .12 : 0;
+  updateSoundButton();
+  if(soundOn){unlockAudio();tone(660,.08,'triangle',.08);}
+}
+updateSoundButton();
 document.addEventListener('pointerdown',unlockAudio,{once:true,passive:true});
 document.addEventListener('keydown',unlockAudio,{once:true});
+
+function cloneGridForSave(){
+  return grid.map(row=>row.map(cell=>cell?{val:cell.val,id:cell.id}:null));
+}
+
+function saveState(){
+  try{
+    localStorage.setItem(SAVE_KEY,JSON.stringify({
+      grid:cloneGridForSave(),
+      score,
+      best,
+      nid,
+      won,
+      allowWin
+    }));
+  }catch(e){}
+}
+
+function loadState(){
+  try{
+    const raw=localStorage.getItem(SAVE_KEY);
+    if(!raw)return false;
+    const state=JSON.parse(raw);
+    if(!state||!Array.isArray(state.grid)||state.grid.length!==SIZE)return false;
+    grid=[];
+    for(let r=0;r<SIZE;r++){
+      const row=[];
+      for(let c=0;c<SIZE;c++){
+        const cell=state.grid[r]&&state.grid[r][c];
+        row.push(cell?{val:cell.val,id:cell.id}:0);
+      }
+      grid.push(row);
+    }
+    score=state.score||0;
+    best=Math.max(best, typeof state.best==='number' ? state.best : 0);
+    nid=state.nid||1;
+    won=!!state.won;
+    allowWin=state.allowWin!==false;
+    busy=false;
+    tileEls={};
+    tilesEl.innerHTML='';
+    updateUI();
+    sizeBoard();
+    hideMods();
+    renderTiles();
+    setTimeout(checkState,0);
+    return true;
+  }catch(e){
+    return false;
+  }
+}
+
+function clearSavedState(){
+  try{ localStorage.removeItem(SAVE_KEY); }catch(e){}
+}
 /* ── TILE PALETTE ── */
 const PAL={
   2:   {bg:'linear-gradient(145deg,#5b9bd5,#2563eb)',fg:'#fff'},
@@ -472,11 +545,17 @@ function tp(r,c){
 
 /* ── INIT ── */
 function init(){
+  if(loadState())return;
+  initFresh();
+}
+
+function initFresh(){
+  clearSavedState();
   grid=[];tileEls={};score=0;won=false;allowWin=true;nid=1;busy=false;
   tilesEl.innerHTML='';
   for(let r=0;r<SIZE;r++) grid.push(Array(SIZE).fill(0));
   updateUI();addTile();addTile();
-  sizeBoard();hideMods();
+  sizeBoard();hideMods();renderTiles();saveState();
 }
 
 function addTile(){
@@ -568,6 +647,7 @@ function move(dir){
   if(score>best){best=score;localStorage.setItem('nr3_best',best);}
   updateUI();addTile();
   busy=true;renderTiles();
+  saveState();
   setTimeout(()=>{busy=false;checkState();},160);
 }
 
@@ -588,12 +668,14 @@ function checkState(){
         won=true;
         playWin();
         document.getElementById('wins').textContent=score;
+        saveState();
         setTimeout(()=>mwinEl.classList.add('show'),200);return;
       }
   }
   if(!canMove()){
     playOver();
     document.getElementById('ovs').textContent=score;
+    saveState();
     setTimeout(()=>movEl.classList.add('show'),200);
   }
 }
@@ -667,10 +749,11 @@ document.addEventListener('keydown',e=>{
 })();
 
 /* ── BUTTONS ── */
-document.getElementById('rbtn').addEventListener('click',()=>{playTap();init();});
-document.getElementById('ovr').addEventListener('click',()=>{playTap();init();});
-document.getElementById('wr').addEventListener('click',()=>{playTap();init();});
-document.getElementById('wc').addEventListener('click',()=>{playTap();allowWin=false;hideMods();});
+soundBtn.addEventListener('click',()=>setSound(!soundOn));
+document.getElementById('rbtn').addEventListener('click',()=>{playTap();initFresh();});
+document.getElementById('ovr').addEventListener('click',()=>{playTap();initFresh();});
+document.getElementById('wr').addEventListener('click',()=>{playTap();initFresh();});
+document.getElementById('wc').addEventListener('click',()=>{playTap();allowWin=false;hideMods();saveState();});
 
 /* ── LOADER ── */
 (function(){
